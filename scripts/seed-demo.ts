@@ -40,6 +40,16 @@ const CATALOG: { artist: string; genres: string[]; albums: { name: string; color
   { artist: "Saint Juniper", genres: ["bedroom pop"], albums: [
     { name: "Houseplants", colors: ["#7bd389", "#2f6f4e", "#e3ffe8", "#0c1f15"], tracks: ["Monstera", "Watering Can", "Sunlight Through Blinds"] },
   ] },
+  // Greyscale, grungy covers: tests that the sky borrows a hue from the genres instead.
+  { artist: "Rust Belt Saints", genres: ["grunge", "alternative rock"], albums: [
+    { name: "Carburetor Hymns", colors: ["#6e6259", "#2b2522", "#a39a91", "#141210"], tracks: ["Oil Slick", "Fuzz Halo", "Basement Summer", "Corrosion"] },
+  ] },
+  { artist: "Ashen Choir", genres: ["gothic rock", "post-punk", "new wave"], albums: [
+    { name: "Disintegrating Light", colors: ["#8a8f96", "#3b3f45", "#d0d3d6", "#101113"], tracks: ["Lullaby for Ghosts", "Pictures in Ash", "Cold Cathedral"] },
+  ] },
+  { artist: "Cinder Tomb", genres: ["thrash metal", "metalcore"], albums: [
+    { name: "Writ in Brimstone", colors: ["#7a1d12", "#1a1a1a", "#c9a36b", "#0b0808"], tracks: ["Hellmouth", "Brimstone Choir", "Nine Circles"] },
+  ] },
 ];
 
 // Deterministic PRNG so every seed looks the same.
@@ -66,6 +76,15 @@ const PERSONAS = [
     maxPlays: 60,
     focusShare: 0.5,
     obsessionShare: 0,
+  },
+  {
+    id: "demo-grunge",
+    displayName: "Grunge Demo",
+    focus: ["Rust Belt Saints", "Ashen Choir", "Cinder Tomb"], // afternoons, loud and gloomy
+    startHourUtc: 18, // 2pm New York
+    maxPlays: 40,
+    focusShare: 0.7,
+    obsessionShare: 0.1,
   },
 ];
 
@@ -136,6 +155,17 @@ async function main() {
 
     for (let i = 0; i < rows.length; i += 500) {
       await db.insert(schema.scrobbles).values(rows.slice(i, i + 500)).onConflictDoNothing();
+    }
+    // Spotify's top lists, as if fetched from /me/top: the focus artists lead every range.
+    await db.delete(schema.topItems).where(eq(schema.topItems.userId, persona.id));
+    const ranked = [...focusIds, ...CATALOG.map((c) => artistKey(c.artist)).filter((id) => !focusIds.has(id))];
+    for (const range of ["short_term", "medium_term", "long_term"] as const) {
+      await db.insert(schema.topItems).values([
+        ...ranked.map((itemId, rank) => ({ userId: persona.id, kind: "artist" as const, range, rank, itemId })),
+        ...[...focusTracks, ...allTracks.filter((t) => !focusIds.has(t.artistId))]
+          .slice(0, 20)
+          .map((t, rank) => ({ userId: persona.id, kind: "track" as const, range, rank, itemId: t.id })),
+      ]);
     }
     console.log(`Seeded ${rows.length} scrobbles → /u/${persona.id}`);
   }

@@ -2,6 +2,7 @@ import "server-only";
 import { and, eq, isNotNull, isNull, sql } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { albumKey, artistKey } from "./keys";
+import { musicBrainzGenres } from "./musicbrainz";
 import { extractPalette } from "./palette";
 import {
   pickImage,
@@ -66,6 +67,35 @@ export async function ingestSpotifyTracks(tracks: SpotifyTrack[]): Promise<Map<s
   return refs;
 }
 
+/** Upserts full artist objects (e.g. from the top-artists endpoint), photos and genres included. */
+export async function ingestSpotifyArtists(list: SpotifyArtist[]) {
+  const ids: string[] = [];
+  for (const a of list) {
+    const id = artistKey(a.name);
+    ids.push(id);
+    const genres = a.genres?.length ? a.genres : null;
+    await db
+      .insert(schema.artists)
+      .values({
+        id,
+        name: a.name,
+        spotifyId: a.id,
+        imageUrl: pickImage(a.images),
+        genres,
+        genresCheckedAt: genres ? Date.now() : null,
+      })
+      .onConflictDoUpdate({
+        target: schema.artists.id,
+        set: {
+          spotifyId: sql`coalesce(${schema.artists.spotifyId}, excluded.spotify_id)`,
+          imageUrl: sql`coalesce(nullif(${schema.artists.imageUrl}, ''), excluded.image_url)`,
+          ...(genres ? { genres, genresCheckedAt: Date.now() } : {}),
+        },
+      });
+  }
+  return ids;
+}
+
 export type ImportedTrack = { trackId: string; name: string; artist: string; album: string };
 
 /** Inserts catalog rows known only by name (from a Spotify data export). */
@@ -102,51 +132,99 @@ export async function ingestImportedTracks(items: ImportedTrack[]) {
 }
 
 /**
- * Fills in artwork and metadata for things we only know by name, most-played first.
- * Uses single-item endpoints (the batch ones are restricted for new Spotify apps) and
- * caps the work per call so a sync request stays fast.
+ * Fills in artwork, genres and real Spotify ids for things we only know by name,
+ * most-played first. Uses single-item endpoints (the batch ones are gone for
+ * development-mode apps) and stops after `budgetMs` so it can run in the background
+ * after a response, or from the cron job, a slice at a time.
  */
-export async function enrichCatalog(token: string, userId: string, limit = 25) {
+export async function enrichCatalog(token: string, userId: string, budgetMs = 20_000) {
+  const deadline = Date.now() + budgetMs;
+  const rateLimited = (e: unknown) => e instanceof SpotifyError && e.status === 429;
+
+  // 1. Tracks imported without full metadata, most-played first.
   const pendingTracks = await db
-    .select({ id: schema.tracks.id })
+    .select({ id: schema.tracks.id, name: schema.tracks.name, artist: schema.tracks.artistNames })
     .from(schema.tracks)
     .innerJoin(schema.scrobbles, eq(schema.scrobbles.trackId, schema.tracks.id))
     .where(and(eq(schema.tracks.enriched, false), eq(schema.scrobbles.userId, userId)))
     .groupBy(schema.tracks.id)
     .orderBy(sql`count(*) desc`)
-    .limit(limit);
+    .limit(200);
 
-  const fetched: SpotifyTrack[] = [];
-  for (const { id } of pendingTracks) {
+  for (const t of pendingTracks) {
+    if (Date.now() > deadline) break;
     try {
-      const t = await spotifyGet<SpotifyTrack>(token, `/tracks/${id}`);
-      if (t) fetched.push(t);
+      if (t.id.startsWith("x:")) await resolveByName(token, t);
+      else {
+        const full = await spotifyGet<SpotifyTrack>(token, `/tracks/${t.id}`);
+        if (full) await ingestSpotifyTracks([full]);
+      }
     } catch (e) {
-      if (e instanceof SpotifyError && e.status === 429) break;
+      if (rateLimited(e)) break;
     }
     // Mark as attempted so a bad id doesn't block the queue forever.
-    await db.update(schema.tracks).set({ enriched: true }).where(eq(schema.tracks.id, id));
+    await db.update(schema.tracks).set({ enriched: true }).where(eq(schema.tracks.id, t.id));
   }
-  if (fetched.length) await ingestSpotifyTracks(fetched);
 
+  // 2. Artist photos and genres: Spotify first, MusicBrainz tags when Spotify has none.
   const pendingArtists = await db
-    .select({ id: schema.artists.id, spotifyId: schema.artists.spotifyId })
+    .select({ id: schema.artists.id, name: schema.artists.name, spotifyId: schema.artists.spotifyId, imageUrl: schema.artists.imageUrl })
     .from(schema.artists)
-    .where(and(isNull(schema.artists.imageUrl), isNotNull(schema.artists.spotifyId)))
-    .limit(limit);
-  for (const a of pendingArtists) {
-    try {
-      const full = await spotifyGet<SpotifyArtist>(token, `/artists/${a.spotifyId}`);
-      await db
-        .update(schema.artists)
-        .set({ imageUrl: pickImage(full?.images) ?? "", genres: full?.genres ?? [] })
-        .where(eq(schema.artists.id, a.id));
-    } catch (e) {
-      if (e instanceof SpotifyError && e.status === 429) break;
+    .innerJoin(schema.scrobbles, eq(schema.scrobbles.artistId, schema.artists.id))
+    .where(and(isNull(schema.artists.genresCheckedAt), eq(schema.scrobbles.userId, userId)))
+    .groupBy(schema.artists.id)
+    .orderBy(sql`count(*) desc`)
+    .limit(100);
+  const topOnly = await db
+    .select({ id: schema.artists.id, name: schema.artists.name, spotifyId: schema.artists.spotifyId, imageUrl: schema.artists.imageUrl })
+    .from(schema.artists)
+    .innerJoin(schema.topItems, eq(schema.topItems.itemId, schema.artists.id))
+    .where(and(isNull(schema.artists.genresCheckedAt), eq(schema.topItems.userId, userId)))
+    .limit(100);
+
+  for (const a of [...pendingArtists, ...topOnly]) {
+    if (Date.now() > deadline) break;
+    let genres: string[] = [];
+    let imageUrl = a.imageUrl;
+    if (a.spotifyId) {
+      try {
+        const full = await spotifyGet<SpotifyArtist>(token, `/artists/${a.spotifyId}`);
+        genres = full?.genres ?? [];
+        imageUrl = imageUrl || pickImage(full?.images) || "";
+      } catch (e) {
+        if (rateLimited(e)) break;
+      }
     }
+    if (!genres.length) genres = (await musicBrainzGenres(a.name)) ?? [];
+    await db
+      .update(schema.artists)
+      .set({ genres, imageUrl, genresCheckedAt: Date.now() })
+      .where(eq(schema.artists.id, a.id));
   }
 
-  await fillPalettes(limit * 2);
+  await fillPalettes(60);
+}
+
+/**
+ * Tracks from the basic "Account data" export only have names. Find the real track by
+ * search and move the plays over to it.
+ */
+async function resolveByName(token: string, t: { id: string; name: string; artist: string }) {
+  const q = encodeURIComponent(`track:${t.name} artist:${t.artist}`);
+  const found = await spotifyGet<{ tracks: { items: SpotifyTrack[] } }>(
+    token,
+    `/search?type=track&limit=1&q=${q}`,
+  );
+  const hit = found?.tracks.items[0];
+  if (!hit) return;
+  const ref = (await ingestSpotifyTracks([hit])).get(hit.id)!;
+  // Plays that would collide with an existing (track, time) row are duplicates; drop them.
+  await db.run(sql`
+    update or ignore ${schema.scrobbles}
+    set track_id = ${ref.trackId}, artist_id = ${ref.artistId}, album_id = ${ref.albumId}
+    where track_id = ${t.id}
+  `);
+  await db.delete(schema.scrobbles).where(eq(schema.scrobbles.trackId, t.id));
 }
 
 /** Computes cover-art palettes for albums that have artwork but no colours yet. */

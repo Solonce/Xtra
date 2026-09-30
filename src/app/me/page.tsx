@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { Card } from "@/components/Card";
 import { CopyLink } from "@/components/CopyLink";
 import { Cover } from "@/components/Cover";
@@ -19,7 +20,7 @@ import { getNowPlaying } from "@/lib/now-playing";
 import { buildProfile } from "@/lib/profile";
 import { getSessionUser } from "@/lib/session";
 import { recentPlays, topAlbums, topArtists, topTracks, totals } from "@/lib/stats";
-import { syncIfStale } from "@/lib/sync";
+import { enrichUser, syncIfStale } from "@/lib/sync";
 import { themeVars } from "@/lib/theme";
 
 export const metadata: Metadata = { title: "Dashboard" };
@@ -29,6 +30,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
   if (!user) redirect("/");
   if (!user.onboarded) redirect("/welcome");
   await syncIfStale(user);
+  after(() => enrichUser(user));
 
   const period = parsePeriod((await searchParams).period);
   const since = periodStart(period);
@@ -41,7 +43,8 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
     recentPlays(user.id, 15),
     getNowPlaying(user),
   ]);
-  const empty = profile.allTime.plays === 0;
+  // Spotify's API only reaches back 50 plays, so most people need the data export.
+  const needsHistory = profile.allTime.plays < 2_000;
 
   return (
     <div style={themeVars(profile.palette)} className="relative min-h-screen">
@@ -82,12 +85,21 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
 
         <NowPlaying username={user.username} initial={nowPlaying} />
 
-        {empty && (
-          <Card title="Getting started">
-            <p className="max-w-2xl text-muted">
-              No scrobbles yet. Play something on Spotify and hit <span className="text-fg">Sync now</span>, or import your
-              history below to backfill everything you’ve ever played.
-            </p>
+        {needsHistory && (
+          <Card title="Bring in your full history">
+            <div className="grid gap-6 lg:grid-cols-[1fr_1.1fr]">
+              <div>
+                <p className="text-2xl font-semibold tracking-tight">
+                  xtra has <span className="font-display font-normal italic text-accent">{nf.format(profile.allTime.plays)}</span> of your plays so far.
+                </p>
+                <p className="mt-3 text-sm text-muted">
+                  Spotify only lets apps see your last 50 plays, plus your top-artist rankings (those already feed your
+                  profile). Everything older is in your Spotify data export. Import it once, and from then on xtra keeps
+                  up automatically.
+                </p>
+              </div>
+              <ImportForm />
+            </div>
           </Card>
         )}
 
@@ -168,7 +180,7 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
           </Card>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
+        <div className={`grid gap-4 ${needsHistory ? "" : "lg:grid-cols-[1.4fr_1fr]"}`}>
           <Card title="Recent scrobbles">
             {recent.length ? (
               <ul className="flex flex-col">
@@ -187,9 +199,11 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
               <p className="text-sm text-muted">Nothing yet.</p>
             )}
           </Card>
-          <Card title="Import history">
-            <ImportForm />
-          </Card>
+          {!needsHistory && (
+            <Card title="Import history">
+              <ImportForm compact />
+            </Card>
+          )}
         </div>
       </main>
     </div>

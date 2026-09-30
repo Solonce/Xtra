@@ -32,6 +32,38 @@ Every profile has a live, generative background: a nebula, aurora ribbons, a glo
 
 The profile page lists which of your stats set each layer ("Why the sky looks like this").
 
+### What lives here: taste-driven page effects
+
+On top of the sky, each profile runs a set of small interactive effects chosen from the listener's genres (`src/lib/vibes.ts`, rendered by `src/components/Atmosphere.tsx` with the effects in `src/effects/`). Genres come from Spotify, or from MusicBrainz tags when Spotify has none. Each artist is weighted by recent plays and Spotify's top-artist rankings, and each genre family unlocks its own effects:
+
+| Taste | Effect | Interaction |
+| --- | --- | --- |
+| Melancholy / emo / shoegaze | Rain with a puddle | ripple it with the cursor |
+| Metal | Little demons, lightning | click to banish (kills are counted); click the sky for a strike |
+| Punk & hardcore | Mosh embers | swipe through them |
+| Grunge & alt-rock | Film scratches & static | click for interference |
+| Goth & post-punk | Bats | click to scatter |
+| Dreamy | Bokeh, snow that banks up | pop the lights |
+| Club | Lasers | click to drop the beat |
+| Hip-hop | Spray paint | click to tag the wall |
+| Jazz & blues | Smoke | wave through it |
+| Classical & score | Floating notes | click to play one |
+| Folk | Fireflies, falling leaves | they follow you; click for a gust |
+| Country | Tumbleweed | click it |
+| Pop | Cursor sparkles | move |
+| K-pop / J-pop / anime | Petals | breeze |
+| Latin & tropical | Confetti | click anywhere |
+| Funk & disco | Mirror ball | — |
+| R&B & soul | Lanterns | click to release one |
+| Lo-fi & chill | VHS | click for tracking noise |
+| Psychedelic | Lava lamp | — |
+| Ambient & post-rock | Shooting stars | click to wish |
+| Experimental | Glitches | click to corrupt |
+| Indie | Paper planes | click to throw |
+| *Habits:* early listening / wide variety / a song on repeat | Morning light / a constellation of your artists / a vinyl of the song | — / hover for names / drag to scratch |
+
+Up to 8 effects run at once, scaled by how strong each taste is. Visitors can switch them off with the ✦ button, and they're disabled for anyone who prefers reduced motion.
+
 ### Profiles
 
 Signing in with Spotify creates your account. You then claim a handle on `/welcome` and choose who can see your profile: **public** (listed on `/explore`), **unlisted** (link only, not indexed) or **private** (only you). You can change both, or delete everything, in `/settings`. The first person to sign in becomes the instance owner.
@@ -62,7 +94,8 @@ Next.js 16 (App Router) · Tailwind CSS v4 · Drizzle ORM on libSQL (a local SQL
 ## How scrobbling works
 
 - **Live:** Spotify's `recently-played` endpoint only returns your last 50 tracks. xtra syncs whenever you open the dashboard (if the last sync was more than 5 minutes ago), when someone views your profile, and whenever `GET /api/cron/sync` is called with `Authorization: Bearer $CRON_SECRET`. Call that endpoint every 30–60 minutes so you don't miss plays. The included GitHub Actions workflow (`.github/workflows/sync.yml`) does this once you set the `XTRA_URL` variable and the `CRON_SECRET` secret.
-- **Backfill:** request your *Extended streaming history* from Spotify's privacy page and upload the `Streaming_History_Audio_*.json` files on the dashboard. As on last.fm, a play only counts after 30 seconds. Artwork for imported tracks fills in gradually during later syncs.
+- **Rankings:** every 6 hours xtra also stores Spotify's top artists and tracks for ~4 weeks, ~6 months and ~1 year. These feed the headline, the wall, the vibes and a "past year" section, so a new profile has depth from its first sign-in.
+- **Backfill:** drop the `my_spotify_data.zip` from Spotify's privacy page onto the dashboard. Both *Extended streaming history* (full lifetime, ids included) and *Account data* (last year, names only; tracks are matched via search) work. The zip is unpacked in the browser and only compact play rows are uploaded, in batches. As on last.fm, a play only counts after 30 seconds. Artwork, genres and matches fill in in the background after each sync.
 - Artists and albums are keyed by name, so live and imported plays merge into the same charts.
 
 ## Deploying

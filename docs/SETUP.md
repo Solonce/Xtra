@@ -42,7 +42,7 @@ Note: with this setup, plays only sync while the app is running. Spotify only re
    | `DATABASE_URL` / `DATABASE_AUTH_TOKEN` | from Turso |
    | `CRON_SECRET` | output of `openssl rand -hex 24` |
 
-3. Create the tables once, from your machine:
+3. Database migrations run automatically on every Vercel deploy (`vercel.json` runs `npm run db:migrate` before `next build`). This needs `DATABASE_URL` and `DATABASE_AUTH_TOKEN` to be available to the **Build** environment in Vercel as well as at runtime. If you host somewhere else, run this after each update:
    ```sh
    DATABASE_URL=libsql://… DATABASE_AUTH_TOKEN=… npm run db:migrate
    ```
@@ -58,6 +58,6 @@ Note: with this setup, plays only sync while the app is running. Spotify only re
 Spotify's live API only knows your last 50 plays. For everything before that:
 
 1. Go to <https://www.spotify.com/account/privacy/> and request **Extended streaming history**. The email usually arrives within a few days, but Spotify quotes up to 30.
-2. On your xtra dashboard, go to **Import history** and select all the `Streaming_History_Audio_*.json` files.
+2. On your xtra dashboard, drop the `my_spotify_data.zip` from the email onto the import box as it is; there's no need to unzip it. The *Account data* export works too (it arrives sooner but only covers the past year).
 
 Artwork for imported tracks fills in over the next few syncs, about 25 tracks per sync, most-played first.

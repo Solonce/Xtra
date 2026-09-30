@@ -1,18 +1,21 @@
 import "server-only";
 import { computeAura } from "./aura";
-import { distance, hexToRgb, luminance } from "./color";
+import { distance, hexToRgb, luminance, saturation, vivify } from "./color";
 import { zoned } from "./format";
 import {
   heatmapGrid,
   type Play,
   playsSince,
   rhythm,
+  spotifyTopArtists,
+  spotifyTopTracks,
   topAlbums,
   topArtists,
   topTracks,
   totals,
 } from "./stats";
 import type { User } from "@/db/schema";
+import { pickEffects, scoreVibes, VIBES } from "./vibes";
 
 const DAY = 86_400_000;
 const DEFAULT_PALETTE = ["#7c5cff", "#ff5ca8", "#2de2e6", "#101018"];
@@ -21,59 +24,129 @@ export type Trait = { id: string; title: string; detail: string };
 
 /**
  * Everything on a public profile is derived from listening data — there are no manual
- * settings. The palette, headline, badges and layout mood all shift as your listening does.
+ * settings. The palette, headline, badges, sky and page effects all shift as your
+ * listening does. Scrobbles are the main source; Spotify's top-artists/tracks rankings
+ * fill the gaps for new profiles (Spotify only hands over the last 50 plays).
  */
 export async function buildProfile(user: User) {
   const now = Date.now();
   const week = now - 7 * DAY;
   const month = now - 30 * DAY;
+  const fortnight = now - 14 * DAY;
 
-  const [weekAlbums, monthAlbums, eraArtists, weekTracks, monthArtists, wall, allTime, recent] =
-    await Promise.all([
-      topAlbums(user.id, week, 12),
-      topAlbums(user.id, month, 12),
-      topArtists(user.id, now - 14 * DAY, 25),
-      topTracks(user.id, week, 5),
-      topArtists(user.id, month, 8),
-      topAlbums(user.id, now - 90 * DAY, 9),
-      totals(user.id, 0),
-      playsSince(user.id, now - 182 * DAY),
-    ]);
+  const [
+    weekAlbums, monthAlbums, recentArtists, weekTracks, monthArtists, ninetyAlbums, allTime, recent,
+    shortArtists, mediumArtists, longArtists, shortTracks, mediumTracks, longTracks,
+  ] = await Promise.all([
+    topAlbums(user.id, week, 12),
+    topAlbums(user.id, month, 12),
+    topArtists(user.id, fortnight, 40),
+    topTracks(user.id, week, 5),
+    topArtists(user.id, month, 8),
+    topAlbums(user.id, now - 90 * DAY, 9),
+    totals(user.id, 0),
+    playsSince(user.id, now - 182 * DAY),
+    spotifyTopArtists(user.id, "short_term"),
+    spotifyTopArtists(user.id, "medium_term"),
+    spotifyTopArtists(user.id, "long_term", 20),
+    spotifyTopTracks(user.id, "short_term"),
+    spotifyTopTracks(user.id, "medium_term", 20),
+    spotifyTopTracks(user.id, "long_term", 10),
+  ]);
 
-  const paletteSource = weekAlbums.length >= 3 ? weekAlbums : monthAlbums;
-  const palette = blendPalette(paletteSource);
+  const recentPlays = recent.filter((p) => p.playedAt >= fortnight);
+
+  // Taste = recent plays, topped up by Spotify's rankings (higher rank → more weight).
+  const taste = new Map<string, { id: string; name: string; genres: string[] | null; weight: number; imageUrl: string | null }>();
+  const addTaste = (a: { id: string; name: string; genres: string[] | null; imageUrl: string | null }, weight: number) => {
+    const t = taste.get(a.id) ?? { ...a, weight: 0 };
+    t.weight += weight;
+    taste.set(a.id, t);
+  };
+  recentArtists.forEach((a) => addTaste(a, a.plays));
+  shortArtists.forEach((a) => addTaste(a, 3 * (1 - a.rank / 50)));
+  mediumArtists.forEach((a) => addTaste(a, 1.5 * (1 - a.rank / 50)));
+  longArtists.forEach((a) => addTaste(a, 1 * (1 - a.rank / 50)));
+  const tasteArtists = [...taste.values()].sort((a, b) => b.weight - a.weight);
+
+  const vibes = scoreVibes(tasteArtists);
+  const hue = vibes[0] ? VIBES[vibes[0].id].hue : 265;
+
+  // Palette: this week's covers (or this month's), plus Spotify's short-term favourites.
+  const paletteAlbums = [
+    ...(weekAlbums.length >= 3 ? weekAlbums : monthAlbums),
+    ...shortTracks.slice(0, 20).map((t) => ({ colors: t.colors, plays: 3 * (1 - t.rank / 50) })),
+  ];
+  const palette = vivify(blendPalette(paletteAlbums), hue);
   const mood: "light" | "dark" = luminance(hexToRgb(palette[0])) > 0.45 ? "light" : "dark";
 
   const { byDay, byHour, streak } = rhythm(recent, user.timezone, now);
   const monthPlays = recent.filter((p) => p.playedAt >= month);
 
   const aura = computeAura({
-    plays: recent.filter((p) => p.playedAt >= now - 14 * DAY),
-    artists: eraArtists,
+    plays: recentPlays,
+    artists: tasteArtists.map((a) => ({ ...a, plays: a.weight })),
     palette,
     mood,
     timezone: user.timezone,
     fallbackSeed: user.id,
   });
 
-  const genres = tally(monthArtists.flatMap((a) => (a.genres ?? []).map((g) => [g, a.plays] as const)));
+  // With only a handful of scrobbles, lean on Spotify's 4-week ranking for the headline.
+  const era =
+    recentPlays.length >= 15 || !shortArtists[0]
+      ? recentArtists[0] ?? null
+      : { ...shortArtists[0], plays: 0 };
+
+  // The wall: 90 days of albums, filled out with albums from Spotify's rankings.
+  const wall: { id: string; name: string; artist: string; imageUrl: string | null; colors: string[] | null }[] = [...ninetyAlbums];
+  for (const t of [...shortTracks, ...mediumTracks, ...longTracks]) {
+    if (wall.length >= 9) break;
+    if (!wall.some((w) => w.id === t.albumId)) {
+      wall.push({ id: t.albumId, name: t.albumName, artist: t.artist, imageUrl: t.imageUrl, colors: t.colors });
+    }
+  }
+
+  const obsession = weekTracks[0]?.plays >= 3 ? weekTracks[0] : null;
+  const effects = pickEffects(vibes, {
+    ...habits(recentPlays, user.timezone),
+    maxRepeat: obsession?.plays ?? 0,
+    artistCount: tasteArtists.length,
+  });
+
+  const genres = tally(tasteArtists.flatMap((a) => (a.genres ?? []).map((g) => [g, a.weight] as const)));
 
   return {
     palette,
     mood,
-    era: eraArtists[0] ?? null,
+    era,
     aura,
-    obsession: weekTracks[0]?.plays >= 3 ? weekTracks[0] : null,
+    vibes: vibes.slice(0, 6),
+    effects,
+    constellation: tasteArtists.slice(0, 16).map((a) => a.name),
+    obsession,
     onRotation: weekTracks,
     topArtists: monthArtists,
-    wall,
-    genres: genres.slice(0, 6),
+    longGame: { artists: longArtists.slice(0, 10), tracks: longTracks.slice(0, 5) },
+    wall: wall.slice(0, 9),
+    genres: genres.slice(0, 8),
     traits: deriveTraits(monthPlays, recent.filter((p) => p.playedAt >= week), monthArtists, user.timezone),
     heatmap: heatmapGrid(byDay, user.timezone, 26, now),
     byHour,
     streak,
     allTime,
     monthPlays: monthPlays.length,
+  };
+}
+
+function habits(plays: Play[], timezone: string) {
+  if (!plays.length) return { night: 0, morning: 0, variety: 0 };
+  const local = zoned(timezone);
+  const hours = plays.map((p) => local(p.playedAt).hour);
+  return {
+    night: hours.filter((h) => h >= 21 || h < 5).length / plays.length,
+    morning: hours.filter((h) => h >= 5 && h < 9).length / plays.length,
+    variety: new Set(plays.map((p) => p.artistId)).size / plays.length,
   };
 }
 
@@ -88,7 +161,8 @@ function blendPalette(albums: { colors: string[] | null; plays: number }[]) {
   const weighted = new Map<string, number>();
   for (const a of albums) {
     (a.colors ?? []).forEach((c, i) => {
-      weighted.set(c, (weighted.get(c) ?? 0) + a.plays / (i + 1));
+      // Favour vivid tones so a single bright detail can beat a big grey background.
+      weighted.set(c, (weighted.get(c) ?? 0) + (a.plays / (i + 1)) * (0.25 + 1.5 * saturation(hexToRgb(c))));
     });
   }
   const picked: string[] = [];

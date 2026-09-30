@@ -1,7 +1,7 @@
 import { isNotNull } from "drizzle-orm";
 import { type NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/db";
-import { syncUser } from "@/lib/sync";
+import { enrichUser, syncUser } from "@/lib/sync";
 
 export const maxDuration = 300;
 
@@ -17,6 +17,8 @@ export async function GET(req: NextRequest) {
   for (const user of users) {
     try {
       results[user.username] = (await syncUser(user)).added;
+      // Share the function's time budget between users for artwork/genre backfill.
+      await enrichUser(user, Math.floor(200_000 / users.length));
     } catch (e) {
       results[user.username] = e instanceof Error ? e.message : "failed";
     }

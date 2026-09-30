@@ -126,3 +126,12 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .mesh span, .eq span, .marquee, .rise { animation: none; }
 }
+
+@keyframes fx-toast {
+  0% { opacity: 0; transform: translate(-50%, 6px) scale(0.9); }
+  15% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -36px); }
+}
+.fx-toast {
+  animation: fx-toast 1.8s ease-out forwards;
+}

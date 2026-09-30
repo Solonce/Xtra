@@ -1,13 +1,23 @@
 import "server-only";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { User } from "@/db/schema";
-import { enrichCatalog, ingestSpotifyTracks } from "./catalog";
-import { accessTokenFor, type RecentlyPlayed, spotifyGet } from "./spotify";
+import { enrichCatalog, ingestSpotifyArtists, ingestSpotifyTracks } from "./catalog";
+import {
+  accessTokenFor,
+  type RecentlyPlayed,
+  type SpotifyArtist,
+  spotifyGet,
+  type SpotifyTrack,
+} from "./spotify";
+
+const RANGES = ["short_term", "medium_term", "long_term"] as const;
+const TOPS_EVERY = 6 * 3_600_000;
 
 /**
  * Pulls new plays from Spotify's recently-played endpoint (it only remembers the last
- * 50 tracks, so this needs to run at least every couple of hours to catch everything).
+ * 50 tracks, so this needs to run at least every couple of hours to catch everything),
+ * and refreshes the top-artists/tracks rankings every few hours.
  */
 export async function syncUser(user: User): Promise<{ added: number }> {
   const token = await accessTokenFor(user);
@@ -43,13 +53,55 @@ export async function syncUser(user: User): Promise<{ added: number }> {
     added = inserted.length;
   }
 
-  await db
-    .update(schema.users)
-    .set({ syncCursor: cursor || null, lastSyncedAt: Date.now() })
-    .where(eq(schema.users.id, user.id));
-
-  await enrichCatalog(token, user.id);
+  const update: Partial<User> = { syncCursor: cursor || null, lastSyncedAt: Date.now() };
+  if (!user.topsSyncedAt || Date.now() - user.topsSyncedAt > TOPS_EVERY) {
+    try {
+      await syncTopItems(user.id, token);
+      update.topsSyncedAt = Date.now();
+    } catch (e) {
+      console.error("top items sync failed", user.id, e);
+    }
+  }
+  await db.update(schema.users).set(update).where(eq(schema.users.id, user.id));
+  Object.assign(user, update);
   return { added };
+}
+
+async function syncTopItems(userId: string, token: string) {
+  for (const range of RANGES) {
+    const [artists, tracks] = await Promise.all([
+      spotifyGet<{ items: SpotifyArtist[] }>(token, `/me/top/artists?limit=50&time_range=${range}`),
+      spotifyGet<{ items: SpotifyTrack[] }>(token, `/me/top/tracks?limit=50&time_range=${range}`),
+    ]);
+    const artistIds = await ingestSpotifyArtists(artists?.items ?? []);
+    const trackItems = (tracks?.items ?? []).filter((t) => t?.id);
+    const refs = await ingestSpotifyTracks(trackItems);
+
+    for (const [kind, ids] of [
+      ["artist", artistIds],
+      ["track", trackItems.map((t) => refs.get(t.id)!.trackId)],
+    ] as const) {
+      await db
+        .delete(schema.topItems)
+        .where(and(eq(schema.topItems.userId, userId), eq(schema.topItems.kind, kind), eq(schema.topItems.range, range)));
+      if (ids.length) {
+        await db
+          .insert(schema.topItems)
+          .values(ids.map((itemId, rank) => ({ userId, kind, range, rank, itemId })))
+          .onConflictDoNothing();
+      }
+    }
+  }
+}
+
+/** Background catalogue work: artwork, genres, name-only imports. */
+export async function enrichUser(user: User, budgetMs = 20_000) {
+  try {
+    const token = await accessTokenFor(user);
+    if (token) await enrichCatalog(token, user.id, budgetMs);
+  } catch (e) {
+    console.error("enrich failed", user.id, e);
+  }
 }
 
 /** Syncs if the last sync is older than `maxAgeMs`. Errors are swallowed: stale data beats a broken page. */

@@ -1,12 +1,12 @@
 import { count, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import type { NextRequest } from "next/server";
+import { after, type NextRequest } from "next/server";
 import { db, schema } from "@/db";
 import { suggestHandle } from "@/lib/handles";
 import { createSession } from "@/lib/session";
 import { exchangeCode, pickImage, type SpotifyMe, spotifyGet } from "@/lib/spotify";
-import { syncIfStale } from "@/lib/sync";
+import { enrichUser, syncIfStale } from "@/lib/sync";
 
 async function uniqueUsername(base: string) {
   for (let i = 0; ; i++) {
@@ -55,6 +55,9 @@ export async function GET(req: NextRequest) {
 
   await createSession(me.id);
   const user = await db.query.users.findFirst({ where: eq(schema.users.id, me.id) });
-  if (user) await syncIfStale(user, 0);
+  if (user) {
+    await syncIfStale(user, 0);
+    after(() => enrichUser(user, 45_000));
+  }
   redirect(user?.onboarded ? "/me" : "/welcome");
 }

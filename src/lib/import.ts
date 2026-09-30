@@ -1,41 +1,29 @@
 import "server-only";
 import { db, schema } from "@/db";
 import { albumKey, artistKey, type ImportedTrack, ingestImportedTracks } from "./catalog";
+import { type HistoryRow, MIN_MS } from "./history-format";
 
-// One entry of Spotify's "Extended streaming history" export (Streaming_History_Audio_*.json).
-type ExtendedEntry = {
-  ts: string;
-  ms_played: number;
-  master_metadata_track_name: string | null;
-  master_metadata_album_artist_name: string | null;
-  master_metadata_album_album_name: string | null;
-  spotify_track_uri: string | null;
-};
+const norm = (s: string) => s.trim().toLowerCase();
 
-// Same scrobble rule as last.fm: a play counts after 30 seconds.
-const MIN_MS = 30_000;
-
-export async function importHistory(userId: string, entries: unknown[]) {
+/** Stores rows parsed by the browser (see history-format.ts). Safe to re-run: duplicates are skipped. */
+export async function importRows(userId: string, rows: HistoryRow[]) {
   const tracks: ImportedTrack[] = [];
   const plays: (typeof schema.scrobbles.$inferInsert)[] = [];
 
-  for (const raw of entries) {
-    const e = raw as ExtendedEntry;
-    const uri = e?.spotify_track_uri;
-    if (!uri?.startsWith("spotify:track:") || !e.master_metadata_track_name) continue;
-    if (!e.master_metadata_album_artist_name || (e.ms_played ?? 0) < MIN_MS) continue;
-
-    const trackId = uri.slice("spotify:track:".length);
-    const artist = e.master_metadata_album_artist_name;
-    const album = e.master_metadata_album_album_name ?? "Unknown album";
-    tracks.push({ trackId, name: e.master_metadata_track_name, artist, album });
+  for (const r of rows) {
+    if (typeof r?.t !== "number" || typeof r.n !== "string" || typeof r.a !== "string") continue;
+    if (!(r.ms >= MIN_MS) || !r.n.trim() || !r.a.trim()) continue;
+    // Name-only plays get a placeholder id until enrichment finds the real track.
+    const trackId = r.id && /^[A-Za-z0-9]{22}$/.test(r.id) ? r.id : `x:${norm(r.a)}|${norm(r.n)}`.slice(0, 300);
+    const album = r.al?.trim() || "Unknown album";
+    tracks.push({ trackId, name: r.n, artist: r.a, album });
     plays.push({
       userId,
       trackId,
-      artistId: artistKey(artist),
-      albumId: albumKey(artist, album),
-      playedAt: Math.floor(Date.parse(e.ts) / 1000) * 1000,
-      msPlayed: e.ms_played,
+      artistId: artistKey(r.a),
+      albumId: albumKey(r.a, album),
+      playedAt: Math.floor(r.t / 1000) * 1000,
+      msPlayed: Math.round(r.ms),
       source: "import",
     });
   }
@@ -52,5 +40,5 @@ export async function importHistory(userId: string, entries: unknown[]) {
       .returning({ id: schema.scrobbles.id });
     added += inserted.length;
   }
-  return { considered: entries.length, eligible: plays.length, added };
+  return { received: rows.length, added };
 }

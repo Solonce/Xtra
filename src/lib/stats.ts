@@ -163,3 +163,44 @@ export function heatmapGrid(byDay: Map<string, number>, timezone: string, weeks 
   }
   return cells;
 }
+
+type Range = "short_term" | "medium_term" | "long_term";
+
+/** Spotify's own top-artists ranking for a time range (~4 weeks / 6 months / 1 year). */
+export async function spotifyTopArtists(userId: string, range: Range, limit = 50) {
+  const ti = schema.topItems;
+  return db
+    .select({
+      id: ar.id,
+      name: ar.name,
+      imageUrl: sql<string | null>`coalesce(nullif(${ar.imageUrl}, ''), ${artistCover})`,
+      genres: ar.genres,
+      rank: ti.rank,
+    })
+    .from(ti)
+    .innerJoin(ar, eq(ar.id, ti.itemId))
+    .where(and(eq(ti.userId, userId), eq(ti.kind, "artist"), eq(ti.range, range)))
+    .orderBy(ti.rank)
+    .limit(limit);
+}
+
+export async function spotifyTopTracks(userId: string, range: Range, limit = 50) {
+  const ti = schema.topItems;
+  return db
+    .select({
+      id: t.id,
+      name: t.name,
+      artist: t.artistNames,
+      albumId: al.id,
+      albumName: al.name,
+      imageUrl: al.imageUrl,
+      colors: al.colors,
+      rank: ti.rank,
+    })
+    .from(ti)
+    .innerJoin(t, eq(t.id, ti.itemId))
+    .innerJoin(al, eq(al.id, t.albumId))
+    .where(and(eq(ti.userId, userId), eq(ti.kind, "track"), eq(ti.range, range)))
+    .orderBy(ti.rank)
+    .limit(limit);
+}

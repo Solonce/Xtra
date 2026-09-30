@@ -1,31 +1,23 @@
-import { NextResponse } from "next/server";
-import { importHistory } from "@/lib/import";
+import { after, NextResponse } from "next/server";
+import type { HistoryRow } from "@/lib/history-format";
+import { importRows } from "@/lib/import";
 import { getSessionUser } from "@/lib/session";
+import { enrichUser } from "@/lib/sync";
 
-export const maxDuration = 300;
+export const maxDuration = 120;
 
+const MAX_ROWS = 5_000;
+
+/** Receives one batch of play rows parsed in the browser. */
 export async function POST(req: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
-  const form = await req.formData();
-  const files = form.getAll("files").filter((f): f is File => f instanceof File);
-  const totals = { files: 0, considered: 0, eligible: 0, added: 0 };
-  for (const file of files) {
-    let entries: unknown;
-    try {
-      entries = JSON.parse(await file.text());
-    } catch {
-      return NextResponse.json({ error: `${file.name} is not valid JSON` }, { status: 400 });
-    }
-    if (!Array.isArray(entries)) {
-      return NextResponse.json({ error: `${file.name} is not a streaming history file` }, { status: 400 });
-    }
-    const r = await importHistory(user.id, entries);
-    totals.files++;
-    totals.considered += r.considered;
-    totals.eligible += r.eligible;
-    totals.added += r.added;
+  const body = (await req.json().catch(() => null)) as { rows?: HistoryRow[]; last?: boolean } | null;
+  if (!Array.isArray(body?.rows) || body.rows.length > MAX_ROWS) {
+    return NextResponse.json({ error: `Send up to ${MAX_ROWS} rows per request` }, { status: 400 });
   }
-  return NextResponse.json(totals);
+  const result = await importRows(user.id, body.rows);
+  if (body.last) after(() => enrichUser(user, 60_000));
+  return NextResponse.json(result);
 }

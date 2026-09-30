@@ -2,6 +2,7 @@ import { sql } from "drizzle-orm";
 import {
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex,
@@ -27,6 +28,8 @@ export const users = sqliteTable("users", {
   tokenExpiresAt: integer("token_expires_at"),
   // playedAt (ms) of the newest scrobble pulled from recently-played; used as the `after` cursor.
   syncCursor: integer("sync_cursor"),
+  // Last refresh of Spotify's top artists/tracks lists (see topItems).
+  topsSyncedAt: integer("tops_synced_at"),
   lastSyncedAt: integer("last_synced_at"),
   createdAt: integer("created_at")
     .notNull()
@@ -41,6 +44,8 @@ export const artists = sqliteTable("artists", {
   spotifyId: text("spotify_id"),
   imageUrl: text("image_url"),
   genres: text("genres", { mode: "json" }).$type<string[]>(),
+  // When we last tried to find genres (Spotify first, then MusicBrainz tags).
+  genresCheckedAt: integer("genres_checked_at"),
 });
 
 export const albums = sqliteTable("albums", {
@@ -80,6 +85,21 @@ export const scrobbles = sqliteTable(
     uniqueIndex("scrobbles_unique").on(t.userId, t.trackId, t.playedAt),
     index("scrobbles_user_time").on(t.userId, t.playedAt),
   ],
+);
+
+// Spotify's own "top artists / top tracks" rankings. Spotify only exposes the last 50
+// plays, but these lists summarise roughly 4 weeks, 6 months and a year of listening,
+// so a brand-new profile has depth from day one.
+export const topItems = sqliteTable(
+  "top_items",
+  {
+    userId: text("user_id").notNull(),
+    kind: text("kind", { enum: ["artist", "track"] }).notNull(),
+    range: text("range", { enum: ["short_term", "medium_term", "long_term"] }).notNull(),
+    rank: integer("rank").notNull(),
+    itemId: text("item_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.kind, t.range, t.rank] })],
 );
 
 export type User = typeof users.$inferSelect;

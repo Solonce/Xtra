@@ -8,6 +8,7 @@ import { Cover } from "@/components/Cover";
 import { Heatmap } from "@/components/Heatmap";
 import { ListeningClock } from "@/components/ListeningClock";
 import { Logo } from "@/components/Logo";
+import { Atmosphere } from "@/components/Atmosphere";
 import { Aura } from "@/components/Aura";
 import { NowPlaying } from "@/components/NowPlaying";
 import { db, schema } from "@/db";
@@ -15,8 +16,9 @@ import { hours, nf } from "@/lib/format";
 import { getNowPlaying } from "@/lib/now-playing";
 import { buildProfile } from "@/lib/profile";
 import { getSessionUserId } from "@/lib/session";
-import { syncIfStale } from "@/lib/sync";
+import { enrichUser, syncIfStale } from "@/lib/sync";
 import { themeVars } from "@/lib/theme";
+import { EFFECT_INFO } from "@/lib/vibes";
 
 const findUser = cache((username: string) =>
   db.query.users.findFirst({ where: eq(schema.users.username, username) }),
@@ -51,7 +53,10 @@ export default async function ProfilePage({ params, searchParams }: PageProps<"/
   if (!user) notFound();
   const isOwner = viewerId === user.id;
   if (user.visibility === "private" && !isOwner) notFound();
-  after(() => syncIfStale(user, 15 * 60_000));
+  after(async () => {
+    await syncIfStale(user, 15 * 60_000);
+    await enrichUser(user, 10_000);
+  });
 
   const [p, nowPlaying] = await Promise.all([buildProfile(user), getNowPlaying(user)]);
   const since = p.allTime.first
@@ -61,6 +66,17 @@ export default async function ProfilePage({ params, searchParams }: PageProps<"/
   return (
     <div style={themeVars(p.palette, p.mood)} className="relative min-h-screen text-fg">
       <Aura params={p.aura.params} />
+      <Atmosphere
+        effects={p.effects}
+        colors={p.palette}
+        accent={p.palette[0]}
+        light={p.mood === "light"}
+        extras={{
+          constellation: p.constellation,
+          vinylCover: p.obsession?.imageUrl ?? null,
+          vinylTitle: p.obsession ? `${p.obsession.name} — ${p.obsession.artist}` : null,
+        }}
+      />
 
       <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-6">
         <Logo />
@@ -235,6 +251,57 @@ export default async function ProfilePage({ params, searchParams }: PageProps<"/
             <ListeningClock byHour={p.byHour} size={200} />
           </section>
         </div>
+
+        {(p.longGame.artists.length > 0 || p.longGame.tracks.length > 0) && (
+          <section className="glass rise mt-4 rounded-3xl p-6" style={{ animationDelay: "440ms" }}>
+            <h2 className="text-xs uppercase tracking-[0.16em] text-muted">The long game · past year, per Spotify</h2>
+            <div className="mt-5 grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+              <ol className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3">
+                {p.longGame.artists.map((a, i) => (
+                  <li key={a.id} className="flex items-center gap-3">
+                    <span className="w-5 shrink-0 font-display text-lg italic text-accent">{i + 1}</span>
+                    <Cover src={a.imageUrl} alt={a.name} round className="size-10 shrink-0 text-xs" />
+                    <span className="truncate text-sm font-medium">{a.name}</span>
+                  </li>
+                ))}
+              </ol>
+              <ol className="flex flex-col gap-3">
+                {p.longGame.tracks.map((t) => (
+                  <li key={t.id} className="flex items-center gap-3">
+                    <Cover src={t.imageUrl} alt={t.name} colors={t.colors} className="size-10 shrink-0 !rounded-md text-[10px]" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{t.name}</div>
+                      <div className="truncate text-xs text-muted">{t.artist}</div>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </section>
+        )}
+
+        {p.effects.length > 0 && (
+          <section className="glass rise mt-4 rounded-3xl p-6" style={{ animationDelay: "460ms" }}>
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+              <div className="max-w-sm">
+                <h2 className="text-xs uppercase tracking-[0.16em] text-muted">What lives here</h2>
+                <p className="mt-3 text-sm text-muted">
+                  Each of these is unlocked by something in {user.displayName}’s listening. Play different music and they
+                  change. Click the background to interact.
+                </p>
+              </div>
+              <ul className="grid flex-1 gap-x-6 gap-y-4 sm:grid-cols-2 lg:max-w-2xl">
+                {p.effects.map((e) => (
+                  <li key={e.id}>
+                    <div className="font-display text-2xl italic text-accent">{EFFECT_INFO[e.id].label}</div>
+                    <div className="text-xs text-muted">{e.reason}</div>
+                    <div className="mt-0.5 text-xs text-fg/80">→ {EFFECT_INFO[e.id].hint}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        )}
 
         {/* How this page was generated */}
         <section className="glass rise mt-4 rounded-3xl p-6" style={{ animationDelay: "480ms" }}>
