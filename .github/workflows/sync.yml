@@ -1,0 +1,19 @@
+name: Scrobble sync
+
+# Spotify's recently-played endpoint only remembers 50 tracks, so pull new plays
+# every 30 minutes. Set the XTRA_URL repository variable and CRON_SECRET secret to enable.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    if: ${{ vars.XTRA_URL != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sync
+        run: |
+          curl --fail-with-body -sS \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ vars.XTRA_URL }}/api/cron/sync"

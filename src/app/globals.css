@@ -1,0 +1,128 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #08080b;
+  --fg: #f4f4f6;
+  --muted: #9a9aa6;
+  --card: rgb(255 255 255 / 0.045);
+  --line: rgb(255 255 255 / 0.09);
+  --accent: #b9a8ff;
+  --p1: #7c5cff;
+  --p2: #ff5ca8;
+  --p3: #2de2e6;
+  --p4: #101018;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-instrument-serif);
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+::selection {
+  background: var(--accent);
+  color: #000;
+}
+
+/* Film grain over everything — the cheapest way to make flat gradients feel physical. */
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: -50%;
+  pointer-events: none;
+  z-index: 50;
+  opacity: 0.07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.glass {
+  background: var(--card);
+  border: 1px solid var(--line);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+}
+
+/* Animated mesh gradient built from the four palette colours. */
+.mesh {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  background: var(--bg);
+}
+.mesh span {
+  position: absolute;
+  width: 60vmax;
+  height: 60vmax;
+  border-radius: 9999px;
+  filter: blur(90px);
+  opacity: 0.55;
+  animation: drift 26s ease-in-out infinite alternate;
+}
+.mesh span:nth-child(1) { background: var(--p1); top: -20vmax; left: -15vmax; }
+.mesh span:nth-child(2) { background: var(--p2); top: -10vmax; right: -20vmax; animation-delay: -7s; animation-duration: 31s; }
+.mesh span:nth-child(3) { background: var(--p3); bottom: -25vmax; left: 10vmax; animation-delay: -13s; animation-duration: 35s; }
+.mesh span:nth-child(4) { background: var(--p4); bottom: -20vmax; right: -10vmax; animation-delay: -3s; opacity: 0.4; }
+.mesh::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 0%, transparent 0%, var(--veil, rgb(8 8 11 / 0.55)) 70%);
+}
+
+@keyframes drift {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(8vmax, 6vmax) scale(1.15); }
+  100% { transform: translate(-6vmax, 10vmax) scale(0.9); }
+}
+
+.eq span {
+  display: inline-block;
+  width: 3px;
+  border-radius: 2px;
+  background: currentColor;
+  animation: eq 0.9s ease-in-out infinite alternate;
+}
+.eq span:nth-child(2) { animation-delay: -0.3s; }
+.eq span:nth-child(3) { animation-delay: -0.6s; }
+.eq span:nth-child(4) { animation-delay: -0.15s; }
+@keyframes eq {
+  from { height: 3px; }
+  to { height: 14px; }
+}
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.marquee {
+  animation: marquee 40s linear infinite;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+.rise {
+  animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mesh span, .eq span, .marquee, .rise { animation: none; }
+}
