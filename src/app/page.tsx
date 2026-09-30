@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
-import { Mesh } from "@/components/Mesh";
+import { Aura } from "@/components/Aura";
+import { DEFAULT_AURA } from "@/lib/aura";
 import { getSessionUserId } from "@/lib/session";
 
 const FEATURES = [
@@ -10,7 +11,7 @@ const FEATURES = [
   },
   {
     title: "A profile that designs itself",
-    body: "No themes and no settings. Colours come from your album covers, the headline from your current era, and badges from how you listen.",
+    body: "No themes and no settings. The sky behind your profile is generated from your last two weeks of listening. Colours come from your covers, stars from late nights, and ripples from songs on repeat.",
   },
   {
     title: "Charts worth sharing",
@@ -26,9 +27,13 @@ export default async function Home({ searchParams }: PageProps<"/">) {
 
   return (
     <div className="relative flex min-h-screen flex-col overflow-hidden">
-      <Mesh />
+      <Aura params={DEFAULT_AURA} veil={0.25} />
       <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-6">
         <Logo />
+        <div className="flex items-center gap-2">
+        <Link href="/explore" className="rounded-full px-4 py-2 text-sm text-muted transition hover:text-fg">
+          Explore
+        </Link>
         <Link
           href={signedIn ? "/me" : "/api/auth/login"}
           prefetch={false}
@@ -36,6 +41,7 @@ export default async function Home({ searchParams }: PageProps<"/">) {
         >
           {signedIn ? "Open dashboard" : "Sign in"}
         </Link>
+        </div>
       </nav>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col justify-center px-5 pb-16 pt-10">

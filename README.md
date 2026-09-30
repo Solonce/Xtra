@@ -6,13 +6,35 @@ A last.fm-style scrobbler for Spotify with a public profile page that **designs 
 
 | Profile element | Where it comes from |
 | --- | --- |
-| Colour palette (background mesh, accent, light/dark mood) | Dominant colours pulled from the album covers you played most this week |
+| The sky (a generative WebGL background, unique per listener) | Your last 14 days, see below |
+| Colour palette (sky, accent, light/dark mood) | Dominant colours pulled from the album covers you played most this week |
 | Headline ("in my ___ era") | Your top artist over the last 14 days |
 | Current obsession | Your most-played track this week (3+ plays) |
 | Badges: Night Owl, Early Bird, Loyalist, Explorer, On Repeat, Album Head, Marathoner, Weekender | How and when you listened over the last 30 days |
 | The wall | Your top 9 albums over the last 90 days |
 | Rhythm heatmap, listening clock, streak | Your plays over the last 26 weeks, in your local time zone |
 | Now playing | Live from your Spotify player |
+
+### The sky
+
+Every profile has a live, generative background: a nebula, aurora ribbons, a glowing core, sound-wave ripples and twinkling stars, all drawn in a single shader (`src/components/Aura.tsx`). How strong each layer is comes from your recent listening (`src/lib/aura.ts`):
+
+| Layer | Driven by |
+| --- | --- |
+| Colours | Your most-played covers this week |
+| Stars | Share of plays after dark |
+| Nebula (amount and turbulence) | Artist variety, plus heavier genres |
+| Core glow | Loyalty to your top artist |
+| Ripples | A song on repeat |
+| Aurora | Late nights and long tracks |
+| Drift speed | Genre energy and plays per day |
+| Layout | A seed from your current top artists, so it reshuffles when your rotation changes |
+
+The profile page lists which of your stats set each layer ("Why the sky looks like this").
+
+### Profiles
+
+Signing in with Spotify creates your account. You then claim a handle on `/welcome` and choose who can see your profile: **public** (listed on `/explore`), **unlisted** (link only, not indexed) or **private** (only you). You can change both, or delete everything, in `/settings`. The first person to sign in becomes the instance owner.
 
 The private dashboard at `/me` has last.fm-style charts (top artists, albums and tracks for 7 days, 30 days, 90 days, 12 months or all time), recent scrobbles, manual sync and a history importer.
 
@@ -27,11 +49,12 @@ Next.js 16 (App Router) · Tailwind CSS v4 · Drizzle ORM on libSQL (a local SQL
    ```sh
    cp .env.example .env.local
    ```
-3. Install, create the database, and optionally seed the demo profile:
+3. Install, create the database, and optionally seed the demo profiles:
    ```sh
    npm install
-   npm run db:push
-   npm run db:seed   # optional: fictional listener at /u/demo
+   npm run db:migrate
+   npm run db:seed   # optional: fictional listeners at /u/demo and /u/demo-rave
+   npm run doctor    # checks env, Spotify credentials and the database
    npm run dev
    ```
 4. Open <http://127.0.0.1:3000> and connect Spotify.
@@ -44,9 +67,9 @@ Next.js 16 (App Router) · Tailwind CSS v4 · Drizzle ORM on libSQL (a local SQL
 
 ## Deploying
 
-Vercel works out of the box. Set the env vars from `.env.example`, point `DATABASE_URL` and `DATABASE_AUTH_TOKEN` at a Turso database, run `npm run db:push` against it once, and add `https://<your-domain>/api/auth/callback` to the Spotify app's redirect URIs.
+See **[docs/SETUP.md](docs/SETUP.md)** for the full checklist (Spotify app, Vercel, Turso, scheduled sync, history import).
 
-> Spotify apps start in *development mode*: only users you add to the app's allow-list (in the Spotify dashboard) can sign in.
+> Since February 2026, Spotify development-mode apps need the owner to have Premium, and allow at most 5 users. Each one must be added to the app's User Management list.
 
 ## Scripts
 
@@ -54,5 +77,7 @@ Vercel works out of the box. Set the env vars from `.env.example`, point `DATABA
 | --- | --- |
 | `npm run dev` / `build` / `start` | Next.js |
 | `npm run typecheck` / `lint` | Checks |
-| `npm run db:push` | Apply `src/db/schema.ts` to the database |
-| `npm run db:seed` | Seed the demo listener |
+| `npm run db:generate` | Create a migration after editing `src/db/schema.ts` |
+| `npm run db:migrate` | Apply migrations to the database |
+| `npm run db:seed` | Seed the demo listeners |
+| `npm run doctor` | Check env vars, Spotify credentials and the database |

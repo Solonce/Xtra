@@ -8,12 +8,13 @@ import { Cover } from "@/components/Cover";
 import { Heatmap } from "@/components/Heatmap";
 import { ListeningClock } from "@/components/ListeningClock";
 import { Logo } from "@/components/Logo";
-import { Mesh } from "@/components/Mesh";
+import { Aura } from "@/components/Aura";
 import { NowPlaying } from "@/components/NowPlaying";
 import { db, schema } from "@/db";
 import { hours, nf } from "@/lib/format";
 import { getNowPlaying } from "@/lib/now-playing";
 import { buildProfile } from "@/lib/profile";
+import { getSessionUserId } from "@/lib/session";
 import { syncIfStale } from "@/lib/sync";
 import { themeVars } from "@/lib/theme";
 
@@ -23,7 +24,11 @@ const findUser = cache((username: string) =>
 
 export async function generateMetadata({ params }: PageProps<"/u/[username]">): Promise<Metadata> {
   const user = await findUser((await params).username);
-  return { title: user ? `${user.displayName}’s listening` : "Not found" };
+  if (!user || user.visibility === "private") return { title: "Not found" };
+  return {
+    title: `${user.displayName}’s listening`,
+    robots: user.visibility === "unlisted" ? { index: false, follow: false } : undefined,
+  };
 }
 
 const TRAIT_GLYPHS: Record<string, string> = {
@@ -37,9 +42,15 @@ const TRAIT_GLYPHS: Record<string, string> = {
   weekender: "✺",
 };
 
-export default async function ProfilePage({ params }: PageProps<"/u/[username]">) {
-  const user = await findUser((await params).username);
+export default async function ProfilePage({ params, searchParams }: PageProps<"/u/[username]">) {
+  const [user, viewerId, { welcome }] = await Promise.all([
+    params.then((p) => findUser(p.username)),
+    getSessionUserId(),
+    searchParams,
+  ]);
   if (!user) notFound();
+  const isOwner = viewerId === user.id;
+  if (user.visibility === "private" && !isOwner) notFound();
   after(() => syncIfStale(user, 15 * 60_000));
 
   const [p, nowPlaying] = await Promise.all([buildProfile(user), getNowPlaying(user)]);
@@ -48,15 +59,34 @@ export default async function ProfilePage({ params }: PageProps<"/u/[username]">
     : null;
 
   return (
-    <div style={themeVars(p.palette, p.mood as "light" | "dark")} className="relative min-h-screen text-fg">
-      <Mesh />
+    <div style={themeVars(p.palette, p.mood)} className="relative min-h-screen text-fg">
+      <Aura params={p.aura.params} />
 
       <nav className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-6">
         <Logo />
-        <Link href="/" className="text-sm text-muted transition hover:text-fg">
-          Make your own →
-        </Link>
+        {isOwner ? (
+          <div className="flex items-center gap-1 text-sm">
+            <span className="glass rounded-full px-3 py-1 text-xs uppercase tracking-[0.14em] text-muted">{user.visibility}</span>
+            <Link href="/me" className="rounded-full px-3 py-2 text-muted transition hover:text-fg">Dashboard</Link>
+            <Link href="/settings" className="rounded-full px-3 py-2 text-muted transition hover:text-fg">Settings</Link>
+          </div>
+        ) : (
+          <Link href="/" className="text-sm text-muted transition hover:text-fg">
+            Make your own →
+          </Link>
+        )}
       </nav>
+
+      {isOwner && welcome && (
+        <div className="mx-auto w-full max-w-6xl px-5">
+          <div className="glass rise rounded-2xl px-5 py-4 text-sm">
+            <span className="font-medium">Your profile is live.</span>{" "}
+            <span className="text-muted">
+              You can’t edit anything here, the sky included. It all rebuilds from what you play, so give it a few days of listening and watch it change.
+            </span>
+          </div>
+        </div>
+      )}
 
       <main className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 pb-20">
         {/* Hero */}
@@ -206,20 +236,34 @@ export default async function ProfilePage({ params }: PageProps<"/u/[username]">
           </section>
         </div>
 
-        {/* Palette provenance */}
-        <footer className="mt-8 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="flex">
-              {p.palette.map((c) => (
-                <span key={c} className="-ml-1.5 size-7 rounded-full border-2 border-[var(--bg)] first:ml-0" style={{ background: c }} title={c} />
-              ))}
+        {/* How this page was generated */}
+        <section className="glass rise mt-4 rounded-3xl p-6" style={{ animationDelay: "480ms" }}>
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-sm">
+              <h2 className="text-xs uppercase tracking-[0.16em] text-muted">Why the sky looks like this</h2>
+              <p className="mt-3 text-sm text-muted">
+                The background is generated from {user.displayName}’s last two weeks of listening. Nobody else’s looks like it,
+                and it changes as their taste does.
+              </p>
+              <div className="mt-4 flex">
+                {p.palette.map((c) => (
+                  <span key={c} className="-ml-1.5 size-7 rounded-full border-2 border-[var(--bg)] first:ml-0" style={{ background: c }} title={c} />
+                ))}
+              </div>
             </div>
-            <p className="text-sm text-muted">
-              This page’s colours come from the album covers {user.displayName} played this week.
-            </p>
+            <dl className="grid flex-1 grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:max-w-2xl">
+              {p.aura.readings.map((r) => (
+                <div key={r.layer}>
+                  <dt className="text-xs uppercase tracking-[0.14em] text-muted">{r.layer}</dt>
+                  <dd className="mt-1">
+                    <span className="font-display text-2xl italic text-accent">{r.value}</span>
+                    <span className="block text-xs text-muted">{r.because}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
           </div>
-          <p className="font-mono text-xs text-muted">{p.palette.join(" · ")}</p>
-        </footer>
+        </section>
       </main>
     </div>
   );

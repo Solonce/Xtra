@@ -14,6 +14,14 @@ export const users = sqliteTable("users", {
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url"),
   timezone: text("timezone").notNull().default("UTC"),
+  // Who can see /u/<username>: everyone and listed on Explore, anyone with the link, or only the owner.
+  visibility: text("visibility", { enum: ["public", "unlisted", "private"] })
+    .notNull()
+    .default("public"),
+  // False until the user has claimed a handle on /welcome.
+  onboarded: integer("onboarded", { mode: "boolean" }).notNull().default(false),
+  // The first person to sign in becomes the owner of the instance.
+  role: text("role", { enum: ["owner", "member"] }).notNull().default("member"),
   accessToken: text("access_token"),
   refreshToken: text("refresh_token"),
   tokenExpiresAt: integer("token_expires_at"),

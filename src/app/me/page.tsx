@@ -8,7 +8,7 @@ import { Heatmap } from "@/components/Heatmap";
 import { ImportForm } from "@/components/ImportForm";
 import { ListeningClock } from "@/components/ListeningClock";
 import { Logo } from "@/components/Logo";
-import { Mesh } from "@/components/Mesh";
+import { Aura } from "@/components/Aura";
 import { NowPlaying } from "@/components/NowPlaying";
 import { RankList } from "@/components/RankList";
 import { StatTile } from "@/components/StatTile";
@@ -27,6 +27,7 @@ export const metadata: Metadata = { title: "Dashboard" };
 export default async function Dashboard({ searchParams }: PageProps<"/me">) {
   const user = await getSessionUser();
   if (!user) redirect("/");
+  if (!user.onboarded) redirect("/welcome");
   await syncIfStale(user);
 
   const period = parsePeriod((await searchParams).period);
@@ -44,17 +45,20 @@ export default async function Dashboard({ searchParams }: PageProps<"/me">) {
 
   return (
     <div style={themeVars(profile.palette)} className="relative min-h-screen">
-      <Mesh />
+      <Aura params={profile.aura.params} veil={0.6} />
       <TimezoneReporter current={user.timezone} />
       <nav className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-5 py-6">
         <Logo href="/me" />
-        <div className="flex items-center gap-2">
-          <Link href={`/u/${user.username}`} className="rounded-full px-4 py-2 text-sm text-muted transition hover:text-fg">
-            View profile
-          </Link>
-          <form action="/api/auth/logout" method="post">
-            <button className="rounded-full px-4 py-2 text-sm text-muted transition hover:text-fg">Sign out</button>
-          </form>
+        <div className="flex items-center gap-1">
+          {[
+            [`/u/${user.username}`, "Profile"],
+            ["/explore", "Explore"],
+            ["/settings", "Settings"],
+          ].map(([href, label]) => (
+            <Link key={href} href={href} className="rounded-full px-3 py-2 text-sm text-muted transition hover:text-fg">
+              {label}
+            </Link>
+          ))}
         </div>
       </nav>
 

@@ -1,4 +1,5 @@
 import "server-only";
+import { computeAura } from "./aura";
 import { distance, hexToRgb, luminance } from "./color";
 import { zoned } from "./format";
 import {
@@ -31,7 +32,7 @@ export async function buildProfile(user: User) {
     await Promise.all([
       topAlbums(user.id, week, 12),
       topAlbums(user.id, month, 12),
-      topArtists(user.id, now - 14 * DAY, 1),
+      topArtists(user.id, now - 14 * DAY, 25),
       topTracks(user.id, week, 5),
       topArtists(user.id, month, 8),
       topAlbums(user.id, now - 90 * DAY, 9),
@@ -41,10 +42,19 @@ export async function buildProfile(user: User) {
 
   const paletteSource = weekAlbums.length >= 3 ? weekAlbums : monthAlbums;
   const palette = blendPalette(paletteSource);
-  const mood = luminance(hexToRgb(palette[0])) > 0.45 ? "light" : "dark";
+  const mood: "light" | "dark" = luminance(hexToRgb(palette[0])) > 0.45 ? "light" : "dark";
 
   const { byDay, byHour, streak } = rhythm(recent, user.timezone, now);
   const monthPlays = recent.filter((p) => p.playedAt >= month);
+
+  const aura = computeAura({
+    plays: recent.filter((p) => p.playedAt >= now - 14 * DAY),
+    artists: eraArtists,
+    palette,
+    mood,
+    timezone: user.timezone,
+    fallbackSeed: user.id,
+  });
 
   const genres = tally(monthArtists.flatMap((a) => (a.genres ?? []).map((g) => [g, a.plays] as const)));
 
@@ -52,6 +62,7 @@ export async function buildProfile(user: User) {
     palette,
     mood,
     era: eraArtists[0] ?? null,
+    aura,
     obsession: weekTracks[0]?.plays >= 3 ? weekTracks[0] : null,
     onRotation: weekTracks,
     topArtists: monthArtists,

@@ -1,5 +1,5 @@
 /**
- * Seeds a fictional "demo" listener so /u/demo shows off the profile without Spotify.
+ * Seeds fictional listeners (/u/demo, /u/demo-rave) to show off profiles without Spotify.
  *   npm run db:seed
  */
 import { eq } from "drizzle-orm";
@@ -47,15 +47,32 @@ let seed = 42;
 const rand = () => ((seed = (seed * 1664525 + 1013904223) % 2 ** 32) / 2 ** 32);
 const pick = <T,>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
 
+// Two contrasting listeners, so the generated skies can be compared side by side.
+const PERSONAS = [
+  {
+    id: "demo",
+    displayName: "Demo Listener",
+    focus: ["Velvet Static"], // a dreamy late-night era with one song on repeat
+    startHourUtc: 22, // 6pm New York
+    maxPlays: 45,
+    focusShare: 0.45,
+    obsessionShare: 0.12,
+  },
+  {
+    id: "demo-rave",
+    displayName: "Rave Demo",
+    focus: ["KXNG VOLT", "Marisol", "Paper Tigers Club"], // daytime, high energy, lots of variety
+    startHourUtc: 12, // 8am New York
+    maxPlays: 60,
+    focusShare: 0.5,
+    obsessionShare: 0,
+  },
+];
+
 async function main() {
   // Imported after loading .env.local, since the client reads DATABASE_URL on import.
   const { db, schema } = await import("../src/db");
   type NewScrobble = typeof schema.scrobbles.$inferInsert;
-  await db.delete(schema.scrobbles).where(eq(schema.scrobbles.userId, "demo"));
-  await db
-    .insert(schema.users)
-    .values({ id: "demo", username: "demo", displayName: "Demo Listener", timezone: "America/New_York" })
-    .onConflictDoUpdate({ target: schema.users.id, set: { timezone: "America/New_York" } });
 
   const allTracks: { id: string; artistId: string; albumId: string; weight: number }[] = [];
   for (const [ai, a] of CATALOG.entries()) {
@@ -75,39 +92,53 @@ async function main() {
     }
   }
 
-  const eraArtist = artistKey("Velvet Static");
-  const obsession = allTracks.find((t) => t.artistId === eraArtist)!;
   const now = Date.now();
-  const rows: NewScrobble[] = [];
+  for (const persona of PERSONAS) {
+    await db.delete(schema.scrobbles).where(eq(schema.scrobbles.userId, persona.id));
+    await db
+      .insert(schema.users)
+      .values({
+        id: persona.id,
+        username: persona.id,
+        displayName: persona.displayName,
+        timezone: "America/New_York",
+        onboarded: true,
+      })
+      .onConflictDoUpdate({ target: schema.users.id, set: { timezone: "America/New_York" } });
 
-  for (let d = 200; d >= 0; d--) {
-    const recent = d < 14;
-    const plays = Math.floor(rand() * (recent ? 45 : 30));
-    // Sessions start in the evening, New York time (22:00–02:00 UTC).
-    let t = Math.floor((now - d * DAY) / DAY) * DAY + (22 + rand() * 4) * 3_600_000 - DAY;
-    for (let i = 0; i < plays; i++) {
-      let track = pick(allTracks);
-      if (rand() < track.weight) track = pick(allTracks.filter((x) => x.artistId === track.artistId));
-      if (recent && rand() < 0.45) track = pick(allTracks.filter((x) => x.artistId === eraArtist));
-      if (d < 7 && rand() < 0.12) track = obsession;
-      t += 150_000 + rand() * 90_000;
-      if (t > now) break;
-      rows.push({
-        userId: "demo",
-        trackId: track.id,
-        artistId: track.artistId,
-        albumId: track.albumId,
-        playedAt: Math.floor(t / 1000) * 1000,
-        msPlayed: 180_000,
-        source: "import",
-      });
+    const focusIds = new Set(persona.focus.map(artistKey));
+    const focusTracks = allTracks.filter((t) => focusIds.has(t.artistId));
+    const obsession = focusTracks[0];
+    const rows: NewScrobble[] = [];
+
+    for (let d = 200; d >= 0; d--) {
+      const recent = d < 14;
+      const plays = Math.floor(rand() * (recent ? persona.maxPlays : 30));
+      let t = Math.floor((now - d * DAY) / DAY) * DAY + (persona.startHourUtc + rand() * 4) * 3_600_000 - DAY;
+      for (let i = 0; i < plays; i++) {
+        let track = pick(allTracks);
+        if (rand() < track.weight) track = pick(allTracks.filter((x) => x.artistId === track.artistId));
+        if (recent && rand() < persona.focusShare) track = pick(focusTracks);
+        if (d < 7 && rand() < persona.obsessionShare) track = obsession;
+        t += 150_000 + rand() * 90_000;
+        if (t > now) break;
+        rows.push({
+          userId: persona.id,
+          trackId: track.id,
+          artistId: track.artistId,
+          albumId: track.albumId,
+          playedAt: Math.floor(t / 1000) * 1000,
+          msPlayed: 180_000,
+          source: "import",
+        });
+      }
     }
-  }
 
-  for (let i = 0; i < rows.length; i += 500) {
-    await db.insert(schema.scrobbles).values(rows.slice(i, i + 500)).onConflictDoNothing();
+    for (let i = 0; i < rows.length; i += 500) {
+      await db.insert(schema.scrobbles).values(rows.slice(i, i + 500)).onConflictDoNothing();
+    }
+    console.log(`Seeded ${rows.length} scrobbles → /u/${persona.id}`);
   }
-  console.log(`Seeded ${rows.length} demo scrobbles → /u/demo`);
 }
 
 main();

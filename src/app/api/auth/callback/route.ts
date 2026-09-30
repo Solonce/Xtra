@@ -1,27 +1,16 @@
-import { eq } from "drizzle-orm";
+import { count, eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { NextRequest } from "next/server";
 import { db, schema } from "@/db";
+import { suggestHandle } from "@/lib/handles";
 import { createSession } from "@/lib/session";
 import { exchangeCode, pickImage, type SpotifyMe, spotifyGet } from "@/lib/spotify";
 import { syncIfStale } from "@/lib/sync";
 
-function slugify(value: string) {
-  return (
-    value
-      .normalize("NFKD")
-      .replace(/[̀-ͯ]/g, "")
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 24) || "listener"
-  );
-}
-
 async function uniqueUsername(base: string) {
   for (let i = 0; ; i++) {
-    const candidate = i === 0 ? base : `${base}-${i + 1}`;
+    const candidate = i === 0 ? base : `${base.slice(0, 21)}-${i + 1}`;
     const taken = await db.query.users.findFirst({ where: eq(schema.users.username, candidate) });
     if (!taken) return candidate;
   }
@@ -53,12 +42,19 @@ export async function GET(req: NextRequest) {
   if (existing) {
     await db.update(schema.users).set(credentials).where(eq(schema.users.id, me.id));
   } else {
-    const username = await uniqueUsername(slugify(me.display_name || me.id));
-    await db.insert(schema.users).values({ id: me.id, username, ...credentials });
+    // A placeholder handle until they pick one on /welcome.
+    const username = await uniqueUsername(suggestHandle(me.display_name || me.id));
+    const [{ owners }] = await db
+      .select({ owners: count() })
+      .from(schema.users)
+      .where(eq(schema.users.role, "owner"));
+    await db
+      .insert(schema.users)
+      .values({ id: me.id, username, role: owners === 0 ? "owner" : "member", ...credentials });
   }
 
   await createSession(me.id);
   const user = await db.query.users.findFirst({ where: eq(schema.users.id, me.id) });
   if (user) await syncIfStale(user, 0);
-  redirect("/me");
+  redirect(user?.onboarded ? "/me" : "/welcome");
 }
